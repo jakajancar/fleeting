@@ -1,4 +1,5 @@
 mod logging;
+mod shutdown;
 mod ssh;
 mod steps;
 mod vm_providers;
@@ -17,10 +18,19 @@ use worker::WorkerConfig;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
-    Cli::parse().run().await.unwrap_or_else(|internal_error: anyhow::Error| {
-        log::error!("{internal_error:#}");
-        ExitCode::FAILURE
-    })
+    let cli = Cli::parse();
+    tokio::select! {
+        biased;
+        () = shutdown::wait_for_signal() => {
+            ExitCode::FAILURE
+        }
+        result = cli.run() => {
+            result.unwrap_or_else(|internal_error: anyhow::Error| {
+                log::error!("{internal_error:#}");
+                ExitCode::FAILURE
+            })
+        }
+    }
 }
 
 #[derive(Parser)]

@@ -226,6 +226,7 @@ impl Future for DockerContext {
 
 impl Drop for DockerContext {
     fn drop(&mut self) {
+        log::debug!("Deleting docker context '{}'...", self.name);
         if let Err(e) = fs::remove_dir_all(&self.context_dir).context("deleting docker context") {
             log::error!("{e:#}");
         }
