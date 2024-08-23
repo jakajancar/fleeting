@@ -127,11 +127,30 @@ impl WorkerConfig {
 
         let step: _ = step.next();
         log::info!("Installing dockerd...");
-        session
-            .channel_open_session()
-            .await?
-            .exec_passthru("install-dockerd", include_str!("install_docker.sh"))
-            .await?;
+        {
+            let install_docker_script = include_str!("install_docker.sh");
+            session
+                .channel_open_session()
+                .await?
+                .exec_passthru("install-dockerd", &install_docker_script)
+                .await?;
+        }
+        let step: _ = step.next();
+        log::info!("Generating certs...");
+        {
+            let prepare_certs_script = include_str!("prepare_certs.sh").replace("{{ip}}", &ip.to_string());
+            session
+                .channel_open_session()
+                .await?
+                .exec_passthru("prepare-certs", &prepare_certs_script)
+                .await?;
+        }
+
+        let step: _ = step.next();
+        log::info!("Downloading certs...");
+        let ca_pem = session.channel_open_session().await?.read_file("/tmp/ca.pem").await?;
+        let client_cert_pem = session.channel_open_session().await?.read_file("/tmp/client-cert.pem").await?;
+        let client_key_pem = session.channel_open_session().await?.read_file("/tmp/client-key.pem").await?;
 
         let step: _ = step.next();
         log::info!("Waiting for dockerd to start...");
@@ -139,14 +158,14 @@ impl WorkerConfig {
             log::debug!("Starting dockerd...");
             let mut dockerd_session = session.channel_open_session().await?;
             let (dockerd, dockerd_handle) = async move {
-                let command = "dockerd -H tcp://0.0.0.0:2375 --tls=false";
+                let command = "dockerd -H tcp://0.0.0.0:2376 --tlsverify --tlscacert=/tmp/ca.pem --tlscert=/tmp/server-cert.pem --tlskey=/tmp/server-key.pem";
                 dockerd_session.exec_passthru("dockerd", command).await
             }
             .remote_handle();
             tokio::spawn(dockerd);
 
             log::debug!("Waiting for port to become reachable...");
-            let tcp_stream_future = wait_for_tcp_stream(ip, 2375);
+            let tcp_stream_future = wait_for_tcp_stream(ip, 2376);
             tokio::select! {
                 result = tcp_stream_future => {
                     result?;
@@ -157,27 +176,32 @@ impl WorkerConfig {
             }
 
             log::debug!("Creating docker context...");
-            let home_dir = std::env::var("HOME")?;
             let context_name = self
                 .custom_context_name
                 .to_owned()
                 .unwrap_or_else(|| format!("fleeting-{}", std::process::id()));
-            let context_name_hash = sha256(context_name.as_bytes());
-            let context_dir = format!("{home_dir}/.docker/contexts/meta/{context_name_hash}");
             let context_meta_json = json!({
                 "Name": context_name,
                 "Metadata": {},
                 "Endpoints": {
                     "docker": {
-                        "Host": format!("tcp://{ip}:2375"),
+                        "Host": format!("tcp://{ip}:2376"),
                         "SkipTLSVerify": false
                     }
                 }
             });
-            fs::create_dir_all(&context_dir)?;
-            fs::write(format!("{context_dir}/meta.json"), serde_json::to_string(&context_meta_json)?)?;
+            let home_dir = std::env::var("HOME")?;
+            let context_name_hash = sha256(context_name.as_bytes());
+            let context_meta_dir = format!("{home_dir}/.docker/contexts/meta/{context_name_hash}");
+            let context_tls_dir = format!("{home_dir}/.docker/contexts/tls/{context_name_hash}");
+            fs::create_dir_all(&context_meta_dir)?;
+            fs::create_dir_all(&format!("{context_tls_dir}/docker"))?;
+            fs::write(format!("{context_meta_dir}/meta.json"), serde_json::to_string(&context_meta_json)?)?;
+            fs::write(format!("{context_tls_dir}/docker/ca.pem"), &ca_pem)?;
+            fs::write(format!("{context_tls_dir}/docker/cert.pem"), &client_cert_pem)?;
+            fs::write(format!("{context_tls_dir}/docker/key.pem"), &client_key_pem)?;
 
-            DockerContext { name: context_name, context_dir, keepalive_handle, dockerd_handle }
+            DockerContext { name: context_name, context_meta_dir, context_tls_dir, keepalive_handle, dockerd_handle }
         };
         log::info!("Docker context '{}' ready.", docker_context.name);
 
@@ -198,7 +222,8 @@ impl russh::client::Handler for ClientHandler {
 
 pub struct DockerContext {
     name: String,
-    context_dir: String,
+    context_meta_dir: String,
+    context_tls_dir: String,
     keepalive_handle: RemoteHandle<anyhow::Result<()>>,
     dockerd_handle: RemoteHandle<anyhow::Result<()>>,
 }
@@ -227,7 +252,10 @@ impl Future for DockerContext {
 impl Drop for DockerContext {
     fn drop(&mut self) {
         log::debug!("Deleting docker context '{}'...", self.name);
-        if let Err(e) = fs::remove_dir_all(&self.context_dir).context("deleting docker context") {
+        if let Err(e) = fs::remove_dir_all(&self.context_meta_dir).context("deleting docker context meta dir") {
+            log::error!("{e:#}");
+        }
+        if let Err(e) = fs::remove_dir_all(&self.context_tls_dir).context("deleting docker context tls dir") {
             log::error!("{e:#}");
         }
     }
