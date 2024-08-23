@@ -1,6 +1,8 @@
+use crate::steps::{self, fmt::StepExt as _};
 use clap::Args;
-use log::Level;
-use std::{fmt::Display, io::Write};
+use either::Either;
+use log::{Level, LevelFilter};
+use std::io::Write;
 
 #[derive(Args)]
 #[command(next_help_heading = "Logging options")]
@@ -15,10 +17,24 @@ pub struct LoggingConfig {
 }
 
 impl LoggingConfig {
-    pub fn init(&self, process_name: impl Display, custom_context_name: Option<String>) {
-        let process_name = process_name.to_string();
+    pub fn init(&self, process_prefix: impl Into<String>) {
+        let process_prefix = process_prefix.into();
+        let user_chosen_level = if self.verbose {
+            LevelFilter::Debug
+        } else if self.quiet {
+            LevelFilter::Warn
+        } else {
+            LevelFilter::Info
+        };
+        let show_steps = user_chosen_level >= LevelFilter::Info;
+
         env_logger::Builder::new()
             .format(move |buf, record| {
+                let step_prefix = match show_steps {
+                    true => Either::Left(steps::current().log_prefix()),
+                    false => Either::Right(""),
+                };
+
                 let level_prefix = match record.level() {
                     Level::Error => "error: ",
                     Level::Warn => "warning: ",
@@ -26,22 +42,11 @@ impl LoggingConfig {
                     Level::Debug => "debug: ",
                     Level::Trace => "trace: ",
                 };
-                write!(buf, "fleeting[{process_name}")?;
-                if let Some(context_name) = &custom_context_name {
-                    write!(buf, " {context_name}")?;
-                }
-                writeln!(buf, "]: {level_prefix}{}", record.args())
+                writeln!(buf, "{process_prefix}{step_prefix}{level_prefix}{}", record.args())?;
+                Ok(())
             })
-            .filter(
-                None,
-                if self.verbose {
-                    log::LevelFilter::max()
-                } else if self.quiet {
-                    log::LevelFilter::Warn
-                } else {
-                    log::LevelFilter::Info
-                },
-            )
+            .filter(None, user_chosen_level.min(LevelFilter::Warn)) // gets too crazy otherwise
+            .filter(Some("fleeting"), user_chosen_level)
             .init();
     }
 }

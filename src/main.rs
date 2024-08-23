@@ -1,5 +1,6 @@
-mod docker_context;
 mod logging;
+mod ssh;
+mod steps;
 mod vm_providers;
 mod worker;
 
@@ -8,15 +9,18 @@ use logging::LoggingConfig;
 use std::{
     env,
     ffi::OsStr,
-    io::Read,
-    process::{Command, ExitCode, Stdio},
+    process::{ExitCode, Stdio},
     time::Duration,
 };
-use tokio::time::sleep;
+use tokio::{io::AsyncReadExt as _, process::Command, time::sleep};
 use worker::WorkerConfig;
 
-fn main() -> ExitCode {
-    Cli::parse().run()
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    Cli::parse().run().await.unwrap_or_else(|internal_error: anyhow::Error| {
+        log::error!("{internal_error:#}");
+        ExitCode::FAILURE
+    })
 }
 
 #[derive(Parser)]
@@ -66,24 +70,45 @@ pub struct WhatToRun {
 }
 
 impl Cli {
-    pub fn run(&self) -> ExitCode {
-        let custom_context_name = self.worker.custom_context_name.clone();
-
+    pub async fn run(&self) -> anyhow::Result<ExitCode> {
         match &self.what_to_run {
             WhatToRun { command: Some(command), bg: false, worker: false } => {
                 // Foreground
-                self.logging.init(std::process::id(), custom_context_name);
-                self.worker.run_task(|context_name| run_user_command(context_name.to_owned(), command))
+                self.logging.init("");
+                let docker_context = self.worker.spawn().await?;
+                let docker_context_name = docker_context.name().to_owned();
+                let user_command = run_user_command(&docker_context_name, command);
+                tokio::select! {
+                    result = docker_context => {
+                        // Context finished first
+                        let err = result.expect_err("should not complete cleanly");
+                        Err(err)
+                    }
+                    result = user_command => {
+                        // User command run finished first
+                        result
+                    }
+                }
             }
             WhatToRun { command: None, bg: true, worker: false } => {
                 // Background launcher
-                self.logging.init("launcher", custom_context_name);
-                spawn_worker_and_wait_for_ok()
+                self.logging.init("fleeting[launcher]");
+                spawn_worker_and_wait_for_ok().await?;
+                Ok(ExitCode::SUCCESS)
             }
             WhatToRun { command: None, bg: true, worker: true } => {
                 // Background worker
-                self.logging.init(std::process::id(), custom_context_name);
-                self.worker.run_task(|_| print_ok_and_sleep())
+                let process_prefix = format!(
+                    "fleeting[{}{}{}]: ",
+                    std::process::id(),
+                    if let Some(_) = &self.worker.custom_context_name { " " } else { "" },
+                    if let Some(s) = &self.worker.custom_context_name { s.as_str() } else { "" },
+                );
+                self.logging.init(process_prefix);
+                let _docker_context = self.worker.spawn().await?;
+                println!("ok");
+                sleep(Duration::MAX).await;
+                unreachable!()
             }
             WhatToRun { bg: false, worker: true, .. } => {
                 panic!("--worker but no --bg?");
@@ -94,14 +119,10 @@ impl Cli {
                     .exit();
             }
         }
-        .unwrap_or_else(|e| {
-            log::error!("{e:#}");
-            ExitCode::FAILURE
-        })
     }
 }
 
-fn spawn_worker_and_wait_for_ok() -> anyhow::Result<ExitCode> {
+async fn spawn_worker_and_wait_for_ok() -> anyhow::Result<()> {
     let mut remaining = env::args_os();
     let program = remaining.next().expect("arg0");
     let mut worker = Command::new(program)
@@ -111,18 +132,19 @@ fn spawn_worker_and_wait_for_ok() -> anyhow::Result<ExitCode> {
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()?;
-    println!("{}", worker.id());
+    let worker_pid = worker.id().expect("child pid");
+    println!("{worker_pid}"); // to allow MY_VM=$(fleeting ... --bg) for later killing
     let mut stdout = worker.stdout.take().expect("stdout");
     let mut buf = [0u8; 3];
-    stdout.read_exact(&mut buf)?;
+    stdout.read_exact(&mut buf).await?;
     match &buf {
-        b"ok\n" => Ok(ExitCode::SUCCESS),
+        b"ok\n" => Ok(()),
         x => Err(anyhow::anyhow!("unexpected response from child: {}", String::from_utf8_lossy(x))),
     }
 }
 
 async fn run_user_command(docker_context_name: impl Into<String>, command: impl IntoIterator<Item = impl AsRef<OsStr>>) -> anyhow::Result<ExitCode> {
-    log::info!("Running user command");
+    log::debug!("Running user command");
     let mut remaining = command.into_iter();
     let program = remaining.next().expect("non-empty command");
     let mut child = tokio::process::Command::new(program)
@@ -130,16 +152,9 @@ async fn run_user_command(docker_context_name: impl Into<String>, command: impl 
         .env("DOCKER_CONTEXT", docker_context_name.into())
         .spawn()?;
     let exit_status = child.wait().await?;
-    log::info!("User command exited with status {exit_status:?}");
+    log::debug!("User command exited with status {exit_status:?}");
     Ok(match exit_status.code() {
         Some(code) => ExitCode::from(code as u8),
         None => anyhow::bail!("command did not exit"), // e.g. signal
     })
-}
-
-async fn print_ok_and_sleep() -> anyhow::Result<ExitCode> {
-    println!("ok");
-    loop {
-        sleep(Duration::MAX).await;
-    }
 }
