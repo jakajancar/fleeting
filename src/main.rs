@@ -1,4 +1,5 @@
 mod cli;
+mod docker_context;
 mod logging;
 mod shutdown;
 mod ssh;

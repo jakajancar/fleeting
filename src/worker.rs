@@ -1,20 +1,17 @@
 use crate::{
+    docker_context::{DockerClientKeys, DockerContext},
     ssh::{self, ChannelExt as _},
     steps,
     vm_providers::{SomeVmProvider, VmProvider},
 };
-use anyhow::Context;
 use async_trait::async_trait;
 use clap::Args;
 use core::str;
-use futures::{future::RemoteHandle, FutureExt as _};
+use futures::FutureExt as _;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use russh::keys::PublicKeyBase64;
-use serde_json::json;
 use std::{
-    fs,
-    future::Future,
     net::Ipv4Addr,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -147,10 +144,12 @@ impl WorkerConfig {
         }
 
         let step: _ = step.next();
-        log::info!("Downloading certs...");
-        let ca_pem = session.channel_open_session().await?.read_file("/tmp/ca.pem").await?;
-        let client_cert_pem = session.channel_open_session().await?.read_file("/tmp/client-cert.pem").await?;
-        let client_key_pem = session.channel_open_session().await?.read_file("/tmp/client-key.pem").await?;
+        log::info!("Downloading client keys...");
+        let docker_client_keys = DockerClientKeys {
+            ca: session.channel_open_session().await?.read_file("/tmp/ca.pem").await?,
+            cert: session.channel_open_session().await?.read_file("/tmp/client-cert.pem").await?,
+            key: session.channel_open_session().await?.read_file("/tmp/client-key.pem").await?,
+        };
 
         let step: _ = step.next();
         log::info!("Waiting for dockerd to start...");
@@ -175,35 +174,13 @@ impl WorkerConfig {
                 }
             }
 
-            log::debug!("Creating docker context...");
             let context_name = self
                 .custom_context_name
                 .to_owned()
                 .unwrap_or_else(|| format!("fleeting-{}", std::process::id()));
-            let context_meta_json = json!({
-                "Name": context_name,
-                "Metadata": {},
-                "Endpoints": {
-                    "docker": {
-                        "Host": format!("tcp://{ip}:2376"),
-                        "SkipTLSVerify": false
-                    }
-                }
-            });
-            let home_dir = std::env::var("HOME")?;
-            let context_name_hash = sha256(context_name.as_bytes());
-            let context_meta_dir = format!("{home_dir}/.docker/contexts/meta/{context_name_hash}");
-            let context_tls_dir = format!("{home_dir}/.docker/contexts/tls/{context_name_hash}");
-            fs::create_dir_all(&context_meta_dir)?;
-            fs::create_dir_all(&format!("{context_tls_dir}/docker"))?;
-            fs::write(format!("{context_meta_dir}/meta.json"), serde_json::to_string(&context_meta_json)?)?;
-            fs::write(format!("{context_tls_dir}/docker/ca.pem"), &ca_pem)?;
-            fs::write(format!("{context_tls_dir}/docker/cert.pem"), &client_cert_pem)?;
-            fs::write(format!("{context_tls_dir}/docker/key.pem"), &client_key_pem)?;
-
-            DockerContext { name: context_name, context_meta_dir, context_tls_dir, keepalive_handle, dockerd_handle }
+            DockerContext::new(context_name, ip, &docker_client_keys, keepalive_handle, dockerd_handle)?
         };
-        log::info!("Docker context '{}' ready.", docker_context.name);
+        log::info!("Docker context '{}' ready.", docker_context.name());
 
         steps::end(step);
         Ok(docker_context)
@@ -218,55 +195,6 @@ impl russh::client::Handler for ClientHandler {
     async fn check_server_key(&mut self, _server_public_key: &russh::keys::key::PublicKey) -> Result<bool, Self::Error> {
         Ok(true) // will check otp instead
     }
-}
-
-pub struct DockerContext {
-    name: String,
-    context_meta_dir: String,
-    context_tls_dir: String,
-    keepalive_handle: RemoteHandle<anyhow::Result<()>>,
-    dockerd_handle: RemoteHandle<anyhow::Result<()>>,
-}
-
-impl DockerContext {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl Future for DockerContext {
-    type Output = anyhow::Result<()>;
-
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        use std::task::Poll;
-        if let Poll::Ready(result) = self.keepalive_handle.poll_unpin(cx) {
-            Poll::Ready(result)
-        } else if let Poll::Ready(result) = self.dockerd_handle.poll_unpin(cx) {
-            Poll::Ready(result)
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
-impl Drop for DockerContext {
-    fn drop(&mut self) {
-        log::debug!("Deleting docker context '{}'...", self.name);
-        if let Err(e) = fs::remove_dir_all(&self.context_meta_dir).context("deleting docker context meta dir") {
-            log::error!("{e:#}");
-        }
-        if let Err(e) = fs::remove_dir_all(&self.context_tls_dir).context("deleting docker context tls dir") {
-            log::error!("{e:#}");
-        }
-    }
-}
-
-fn sha256(x: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(x);
-    let result = hasher.finalize();
-    hex::encode(result)
 }
 
 /// Tries to connect for 60 seconds
