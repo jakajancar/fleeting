@@ -110,10 +110,3 @@ impl ChannelExt for Channel<Msg> {
         Ok(outcome.stdout.unwrap())
     }
 }
-
-pub fn parse_public_key(arg: &str) -> anyhow::Result<String> {
-    if !arg.starts_with("ssh-") {
-        anyhow::bail!("ssh public key should start with 'ssh-'")
-    }
-    Ok(arg.to_owned())
-}

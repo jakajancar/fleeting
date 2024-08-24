@@ -1,6 +1,6 @@
 use crate::{
     docker_context::{DockerClientKeys, DockerContext},
-    ssh::{self, ChannelExt as _},
+    ssh::ChannelExt as _,
     steps,
     vm_providers::{SomeVmProvider, VmProvider},
 };
@@ -12,6 +12,7 @@ use rand::distributions::Alphanumeric;
 use rand::Rng;
 use russh::keys::PublicKeyBase64;
 use std::{
+    fs,
     net::Ipv4Addr,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -35,10 +36,9 @@ pub struct WorkerConfig {
     #[arg(long = "context_name", global = true)]
     pub custom_context_name: Option<String>,
 
-    // [INTERNAL] Extra key to authorize. Not sure we'll use SSH in the future, so not public API.
-    // TODO: make filename
-    #[clap(long, short = 'k', value_parser = ssh::parse_public_key, hide = true, global = true)]
-    authorize_ssh_key: Option<String>,
+    /// [INTERNAL] Authorize `~/.ssh/id_*.pub` for SSH connections
+    #[clap(long, hide = true, global = true)]
+    ssh: bool,
 }
 
 impl WorkerConfig {
@@ -48,14 +48,36 @@ impl WorkerConfig {
         let step = steps::start();
         log::info!("Starting an ephemeral instance...");
         let (ip, key_pair, otp) = {
-            log::debug!("Generating keys...");
+            log::debug!("Generating ephemeral ssh key...");
             let key_pair = russh::keys::key::KeyPair::generate_ed25519().expect("key generated");
             let authorized_key = format!("{} {} fleeting-ephemeral", key_pair.name(), key_pair.public_key_base64());
-            log::debug!("Generated ssh key {authorized_key}");
+            log::debug!("{authorized_key}");
+
+            let mut authorized_keys = vec![authorized_key];
+            if self.ssh {
+                log::debug!("Adding user's ssh keys:");
+                let home_dir = dirs::home_dir().ok_or(anyhow::format_err!("cannot locate home dir"))?;
+                let ssh_dir = home_dir.join(".ssh");
+                if ssh_dir.exists() {
+                    let pattern = ssh_dir.join("id_*.pub").to_str().expect("valid unicode").to_owned();
+                    for entry in glob::glob(&pattern).expect("valid glob") {
+                        let path = entry?;
+                        let content = fs::read_to_string(&path)?;
+                        let content = content.trim();
+                        log::debug!("{path:?}: {content}");
+                        authorized_keys.push(content.to_owned());
+                    }
+                } else {
+                    log::warn!("{ssh_dir:?} does not exist");
+                }
+            }
+
+            log::debug!("Generating otp...");
             let otp = rand::thread_rng().sample_iter(&Alphanumeric).take(20).map(char::from).collect::<String>();
-            log::debug!("Generated otp {otp}");
+            log::debug!("{otp}");
+
             let user_data = include_str!("user_data_template.sh")
-                .replace("{{authorized_key}}", &authorized_key)
+                .replace("{{authorized_keys}}", &authorized_keys.join("\n"))
                 .replace("{{keepalive_timeout}}", &KEEPALIVE_TIMEOUT.as_secs().to_string())
                 .replace("{{otp}}", &otp);
             let ip = self.vm_provider.spawn(&user_data).await?;
