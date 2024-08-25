@@ -1,5 +1,6 @@
 use crate::{
-    docker_context::{DockerClientKeys, DockerContext},
+    docker_context::DockerContext,
+    docker_tls::DockerCA,
     ssh::ChannelExt as _,
     steps,
     vm_providers::{SomeVmProvider, VmProvider},
@@ -155,23 +156,25 @@ impl WorkerConfig {
                 .await?;
         }
         let step: _ = step.next();
-        log::info!("Generating certs...");
-        {
-            let prepare_certs_script = include_str!("prepare_certs.sh").replace("{{ip}}", &ip.to_string());
-            session
-                .channel_open_session()
-                .await?
-                .exec_passthru("prepare-certs", &prepare_certs_script)
-                .await?;
-        }
-
-        let step: _ = step.next();
-        log::info!("Downloading client keys...");
-        let docker_client_keys = DockerClientKeys {
-            ca: session.channel_open_session().await?.read_file("/tmp/ca.pem").await?,
-            cert: session.channel_open_session().await?.read_file("/tmp/client-cert.pem").await?,
-            key: session.channel_open_session().await?.read_file("/tmp/client-key.pem").await?,
-        };
+        log::info!("Setting up docker keys...");
+        let ca = DockerCA::new()?;
+        let server_tls = ca.create_server_cert(ip)?;
+        let client_tls = ca.create_client_cert()?;
+        session
+            .channel_open_session()
+            .await?
+            .write_file("/tmp/ca.pem", ca.cert.pem().as_bytes())
+            .await?;
+        session
+            .channel_open_session()
+            .await?
+            .write_file("/tmp/server-cert.pem", server_tls.cert.pem().as_bytes())
+            .await?;
+        session
+            .channel_open_session()
+            .await?
+            .write_file("/tmp/server-key.pem", server_tls.key_pair.serialize_pem().as_bytes())
+            .await?;
 
         let step: _ = step.next();
         log::info!("Waiting for dockerd to start...");
@@ -200,7 +203,7 @@ impl WorkerConfig {
                 .custom_context_name
                 .to_owned()
                 .unwrap_or_else(|| format!("fleeting-{}", std::process::id()));
-            DockerContext::new(context_name, ip, &docker_client_keys, keepalive_handle, dockerd_handle)?
+            DockerContext::new(context_name, ip, &ca.cert, &client_tls, keepalive_handle, dockerd_handle)?
         };
         log::info!("Docker context '{}' ready.", docker_context.name());
 

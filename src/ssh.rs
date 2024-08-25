@@ -1,6 +1,7 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use russh::{client::Msg, Channel, CryptoVec};
+use tokio::io::BufReader;
 
 #[derive(PartialEq, Eq, Copy, Clone)]
 pub enum StreamMode<'a> {
@@ -24,6 +25,7 @@ pub trait ChannelExt {
         &mut self,
         command: &str,
         err_on_nonzero: bool,
+        stdin: Option<&[u8]>,
         stdout_mode: StreamMode<'_>,
         stderr_mode: StreamMode<'_>,
     ) -> anyhow::Result<ExecOutcome>;
@@ -32,6 +34,7 @@ pub trait ChannelExt {
     async fn exec_passthru(&mut self, context: &str, command: &str) -> anyhow::Result<()>;
 
     async fn read_file(&mut self, path: &str) -> anyhow::Result<CryptoVec>;
+    async fn write_file(&mut self, path: &str, buf: &[u8]) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -40,6 +43,7 @@ impl ChannelExt for Channel<Msg> {
         &mut self,
         command: &str,
         err_on_nonzero: bool,
+        stdin: Option<&[u8]>,
         stdout_mode: StreamMode<'_>,
         stderr_mode: StreamMode<'_>,
     ) -> anyhow::Result<ExecOutcome> {
@@ -63,6 +67,12 @@ impl ChannelExt for Channel<Msg> {
             }
             Ok(())
         }
+
+        if let Some(stdin) = stdin {
+            let buf = BufReader::new(stdin);
+            self.data(buf).await?;
+        }
+        self.eof().await?;
 
         while let Some(msg) = self.wait().await {
             match msg {
@@ -93,7 +103,9 @@ impl ChannelExt for Channel<Msg> {
 
     async fn exec_passthru(&mut self, context: &str, command: &str) -> anyhow::Result<()> {
         let passthru = StreamMode::Log { level: log::Level::Debug, prefix: context };
-        self.exec_to_completion(command, true, passthru, passthru).await.context(context.to_owned())?;
+        self.exec_to_completion(command, true, None, passthru, passthru)
+            .await
+            .context(context.to_owned())?;
         Ok(())
     }
 
@@ -103,10 +115,24 @@ impl ChannelExt for Channel<Msg> {
             .exec_to_completion(
                 &command,
                 true,
+                None,
                 StreamMode::Capture,
-                StreamMode::Log { level: log::Level::Debug, prefix: &command },
+                StreamMode::Log { level: log::Level::Warn, prefix: &command },
             )
             .await?;
         Ok(outcome.stdout.unwrap())
+    }
+
+    async fn write_file(&mut self, path: &str, buf: &[u8]) -> anyhow::Result<()> {
+        let command = format!("cat >{path}");
+        self.exec_to_completion(
+            &command,
+            true,
+            Some(buf),
+            StreamMode::Log { level: log::Level::Warn, prefix: &command },
+            StreamMode::Log { level: log::Level::Warn, prefix: &command },
+        )
+        .await?;
+        Ok(())
     }
 }

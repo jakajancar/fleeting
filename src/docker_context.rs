@@ -1,15 +1,9 @@
 use anyhow::Context;
 use core::str;
 use futures::{future::RemoteHandle, FutureExt as _};
-use russh::CryptoVec;
+use rcgen::{Certificate, CertifiedKey};
 use serde_json::json;
 use std::{fs, future::Future, net::Ipv4Addr, path::PathBuf, task::Poll};
-
-pub struct DockerClientKeys {
-    pub ca: CryptoVec,
-    pub cert: CryptoVec,
-    pub key: CryptoVec,
-}
 
 pub struct DockerContext {
     name: String,
@@ -23,7 +17,8 @@ impl DockerContext {
     pub fn new(
         name: impl Into<String>,
         ip: Ipv4Addr,
-        keys: &DockerClientKeys,
+        ca_cert: &Certificate,
+        ckey: &CertifiedKey,
         keepalive_handle: RemoteHandle<anyhow::Result<()>>,
         dockerd_handle: RemoteHandle<anyhow::Result<()>>,
     ) -> anyhow::Result<Self> {
@@ -46,9 +41,9 @@ impl DockerContext {
         fs::create_dir_all(&meta_dir)?;
         fs::create_dir_all(&tls_dir.join("docker"))?;
         fs::write(meta_dir.join("meta.json"), serde_json::to_string(&meta_json)?)?;
-        fs::write(tls_dir.join("docker/ca.pem"), &keys.ca)?;
-        fs::write(tls_dir.join("docker/cert.pem"), &keys.cert)?;
-        fs::write(tls_dir.join("docker/key.pem"), &keys.key)?;
+        fs::write(tls_dir.join("docker/ca.pem"), ca_cert.pem().as_bytes())?;
+        fs::write(tls_dir.join("docker/cert.pem"), ckey.cert.pem().as_bytes())?;
+        fs::write(tls_dir.join("docker/key.pem"), ckey.key_pair.serialize_pem().as_bytes())?;
         Ok(Self { name, meta_dir, tls_dir, keepalive_handle, dockerd_handle })
     }
 
