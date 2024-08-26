@@ -11,12 +11,12 @@ pub enum StreamMode<'a> {
 
 pub struct ExecOutcome {
     #[allow(unused)]
-    code: u32,
+    pub code: u32,
     /// Some(_) if stdout is configured to `StreamMode::Capture`.
-    stdout: Option<CryptoVec>,
+    pub stdout: Option<CryptoVec>,
     /// Some(_) if stderr is configured to `StreamMode::Capture`.
     #[allow(unused)]
-    stderr: Option<CryptoVec>,
+    pub stderr: Option<CryptoVec>,
 }
 
 #[async_trait]

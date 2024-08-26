@@ -1,5 +1,7 @@
+mod arch;
 mod cli;
 mod docker_context;
+mod docker_releases;
 mod docker_tls;
 mod logging;
 mod shutdown;

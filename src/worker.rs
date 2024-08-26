@@ -1,7 +1,9 @@
 use crate::{
+    arch::Arch,
     docker_context::DockerContext,
+    docker_releases::get_docker_releases,
     docker_tls::DockerCA,
-    ssh::ChannelExt as _,
+    ssh::{ChannelExt as _, StreamMode},
     steps,
     vm_providers::{SomeVmProvider, VmProvider},
 };
@@ -12,6 +14,7 @@ use futures::FutureExt as _;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use russh::keys::PublicKeyBase64;
+use semver::VersionReq;
 use std::{
     fs,
     net::Ipv4Addr,
@@ -36,6 +39,10 @@ pub struct WorkerConfig {
     /// Name of the ephemeral docker context [default: fleeting-<pid>]
     #[arg(long = "context_name", value_name = "NAME", global = true)]
     pub custom_context_name: Option<String>,
+
+    /// Docker version to install on server, e.g. '=1.2.3' or '^1.2.3'.
+    #[arg(long, default_value = "*", value_name = "SELECTOR", global = true)]
+    pub dockerd_version: VersionReq,
 
     /// [INTERNAL] Authorize `~/.ssh/id_*.pub` for SSH connections
     #[clap(long, hide = true, global = true)]
@@ -148,13 +155,41 @@ impl WorkerConfig {
         let step: _ = step.next();
         log::info!("Installing dockerd...");
         {
-            let install_docker_script = include_str!("install_docker.sh");
+            log::debug!("Determining VM architecture...");
+            let arch = session
+                .channel_open_session()
+                .await?
+                .exec_to_completion(
+                    "uname -m",
+                    true,
+                    None,
+                    StreamMode::Capture,
+                    StreamMode::Log { level: log::Level::Warn, prefix: "uname -m" },
+                )
+                .await?
+                .stdout
+                .unwrap();
+            let arch: Arch = std::str::from_utf8(&arch).expect("valid utf-8").parse().expect("arch");
+
+            log::debug!("Listing releases...");
+            let releases = get_docker_releases(arch).await?;
+
+            log::debug!("Selecting a release...");
+            let release = releases.into_iter().rev().find(|(version, _)| self.dockerd_version.matches(version));
+            let Some((version, tarball_url)) = release else {
+                anyhow::bail!("No docker version matches requirement: {}", self.dockerd_version)
+            };
+            log::info!("{version}");
+
+            log::debug!("Running install script...");
+            let install_docker_script = include_str!("install_docker.sh").replace("{{tarball_url}}", tarball_url.as_str());
             session
                 .channel_open_session()
                 .await?
                 .exec_passthru("install-dockerd", &install_docker_script)
                 .await?;
         }
+
         let step: _ = step.next();
         log::info!("Setting up docker keys...");
         let ca = DockerCA::new()?;
