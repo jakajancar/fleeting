@@ -111,7 +111,7 @@ impl WorkerConfig {
 
             log::debug!("Attempting to authenticate...");
             let key_pair = Arc::new(key_pair);
-            let auth_deadline = SystemTime::now() + Duration::from_secs(60); // TODO: make configurable
+            let auth_deadline = SystemTime::now() + Duration::from_secs(60);
             loop {
                 if SystemTime::now() > auth_deadline {
                     anyhow::bail!("Could not auth via SSH in time limit")
