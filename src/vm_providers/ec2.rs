@@ -12,6 +12,8 @@ use clap::Args;
 use std::net::Ipv4Addr;
 use tokio::time::{sleep, Duration};
 
+const SECURITY_GROUP_NAME: &str = "fleeting";
+
 #[derive(Args, Clone)]
 pub struct Ec2 {
     /// [default: $AWS[_DEFAULT]_REGION > profile > EC2 IMDSv2 > us-east-1]
@@ -71,15 +73,39 @@ impl VmProvider for Ec2 {
             }
         };
 
-        // TODO
-        // aws ec2 create-security-group \
-        //     --group-name fleeting \
-        //     --description 'fleeting ephemeral instances'
+        let step: _ = step.next();
+        log::info!("Creating security group if needed...");
+        let security_group_id = {
+            let output = ec2_client.describe_security_groups().group_names(SECURITY_GROUP_NAME).send().await?;
+            match output.security_groups() {
+                [] => {
+                    let output = ec2_client
+                        .create_security_group()
+                        .group_name(SECURITY_GROUP_NAME)
+                        .description("fleeting ephemeral instances")
+                        .send()
+                        .await?;
+                    let group_id = output.group_id().unwrap();
 
-        // aws ec2 authorize-security-group-ingress \
-        //     --group-id sg-0d9613dfa3104679c \
-        //     --protocol all \
-        //     --cidr 0.0.0.0/0
+                    ec2_client
+                        .authorize_security_group_ingress()
+                        .group_id(group_id)
+                        .ip_protocol("-1")
+                        .cidr_ip("0.0.0.0/0")
+                        .send()
+                        .await?;
+
+                    log::info!("{group_id} (created)");
+                    group_id.to_owned()
+                }
+                [sg] => {
+                    let group_id = sg.group_id().unwrap();
+                    log::info!("{group_id} (already existed)");
+                    group_id.to_owned()
+                }
+                x => panic!("{} matching security groups", x.len()),
+            }
+        };
 
         let step: _ = step.next();
         log::info!("Launching an instance...");
@@ -91,7 +117,7 @@ impl VmProvider for Ec2 {
                 .instance_type(self.instance_type.clone())
                 .user_data(BASE64_STANDARD.encode(user_data))
                 .instance_initiated_shutdown_behavior(ShutdownBehavior::Terminate)
-                .security_group_ids("sg-0d9613dfa3104679c")
+                .security_group_ids(security_group_id)
                 .tag_specifications(
                     TagSpecification::builder()
                         .resource_type(ResourceType::Instance)
