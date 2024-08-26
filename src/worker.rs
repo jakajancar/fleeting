@@ -34,7 +34,7 @@ pub struct WorkerConfig {
     vm_provider: SomeVmProvider,
 
     /// Name of the ephemeral docker context [default: fleeting-<pid>]
-    #[arg(long = "context_name", global = true)]
+    #[arg(long = "context_name", value_name = "NAME", global = true)]
     pub custom_context_name: Option<String>,
 
     /// [INTERNAL] Authorize `~/.ssh/id_*.pub` for SSH connections
