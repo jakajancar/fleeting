@@ -37,7 +37,7 @@ pub struct WorkerConfig {
     vm_provider: SomeVmProvider,
 
     /// Name of the ephemeral docker context [default: fleeting-<pid>]
-    #[arg(long = "context_name", value_name = "NAME", global = true)]
+    #[arg(long = "context-name", value_name = "NAME", global = true)]
     pub custom_context_name: Option<String>,
 
     /// Docker version to install on server, e.g. '=1.2.3' or '^1.2.3'.

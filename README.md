@@ -68,7 +68,7 @@ Run multiple commands on the same ephemeral host:
           Output additional debugging information
 
 <b><u>VM/Docker options:</u></b>
-      <b>--context_name</b> &lt;NAME&gt;
+      <b>--context-name</b> &lt;NAME&gt;
           Name of the ephemeral docker context [default: fleeting-&lt;pid&gt;]
 
       <b>--dockerd-version</b> &lt;SELECTOR&gt;
