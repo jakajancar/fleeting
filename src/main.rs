@@ -1,17 +1,5 @@
-mod arch;
-mod cli;
-mod docker_context;
-mod docker_releases;
-mod docker_tls;
-mod logging;
-mod shutdown;
-mod ssh;
-mod steps;
-mod vm_providers;
-mod worker;
-
 use clap::Parser;
-use cli::Cli;
+use fleeting::cli::Cli;
 use std::process::ExitCode;
 
 #[tokio::main(flavor = "current_thread")]
@@ -19,7 +7,7 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     tokio::select! {
         biased;
-        () = shutdown::wait_for_signal() => {
+        () = fleeting::shutdown::wait_for_signal() => {
             ExitCode::FAILURE
         }
         result = cli.run() => {

@@ -2,8 +2,10 @@
 name = "fleeting"
 version = "0.1.0"
 edition = "2021"
+default-run = "fleeting"
 
 [dependencies]
+ansi-to-html = "0.2.1"
 anyhow = "1.0.86"
 async-trait = "0.1.81"
 aws-config = "1.5.5"
