@@ -1,0 +1,101 @@
+name: Rust
+
+on: push
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build
+      run: cargo build
+
+    - name: Run tests
+      run: cargo test
+
+    - name: Check forbidden deps
+      run: |
+        for FORBIDDEN in native-tls openssl
+        do
+            if cargo tree --invert $FORBIDDEN 2>/dev/null
+            then
+                echo "Some package has included $FORBIDDEN" >&2
+                exit 1
+            fi
+        done
+  
+  # `cross-rs/cross` does not support macOS, so we just build on native platforms (and cross-compile only within platform)
+  build-release:
+    strategy:
+      matrix:
+          include:
+            - { os: 'ubuntu-latest',  target: 'i686-unknown-linux-musl',    apt_packages: 'gcc-i686-linux-gnu' }
+            - { os: 'ubuntu-latest',  target: 'x86_64-unknown-linux-musl',  apt_packages: 'gcc-x86-64-linux-gnu' }
+            - { os: 'ubuntu-latest',  target: 'aarch64-unknown-linux-musl', apt_packages: 'gcc-aarch64-linux-gnu' }
+            - { os: 'macos-latest',   target: 'x86_64-apple-darwin' }
+            - { os: 'macos-latest',   target: 'aarch64-apple-darwin' }
+            - { os: 'windows-latest', target: 'i686-pc-windows-msvc' }
+            - { os: 'windows-latest', target: 'x86_64-pc-windows-msvc' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install apt packages
+        if: matrix.apt_packages
+        run: sudo apt-get update && sudo apt-get install ${{ matrix.apt_packages }}
+
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifacts
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir target/release_artifacts
+          gzip >target/release_artifacts/fleeting-${{ matrix.target }}.gz <target/${{ matrix.target }}/release/fleeting
+
+      - name: Prepare artifacts
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          mkdir target/release_artifacts
+          cp target/${{ matrix.target }}/release/fleeting.exe target/release_artifacts
+          cd target/release_artifacts
+          7z a fleeting-${{ matrix.target }}.zip fleeting.exe
+          rm fleeting.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release_artifacts-${{ matrix.target }}
+          path: target/release_artifacts/*
+          compression-level: 0 # already compressed
+
+  release:
+    needs: [test, build-release]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release_artifacts-*
+          path: target/release_artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: |
+          ls -lh target/release_artifacts
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release_artifacts/*
