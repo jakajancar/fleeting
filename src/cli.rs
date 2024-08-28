@@ -110,13 +110,15 @@ impl Cli {
 async fn spawn_worker_and_wait_for_ok() -> anyhow::Result<()> {
     let mut remaining = env::args_os();
     let program = remaining.next().expect("arg0");
-    let mut worker = Command::new(program)
-        .arg("--worker")
-        .args(remaining)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()?;
+    let mut command = Command::new(program);
+    command.arg("--worker");
+    command.args(remaining);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::inherit());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut worker = command.spawn()?;
     let worker_pid = worker.id().expect("child pid");
     println!("{worker_pid}"); // to allow MY_VM=$(fleeting ... --bg) for later killing
     let mut stdout = worker.stdout.take().expect("stdout");
