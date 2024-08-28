@@ -38,6 +38,9 @@ impl DockerContext {
         let name_hash = sha256(name.as_bytes());
         let meta_dir = home_dir.join(".docker/contexts/meta").join(&name_hash);
         let tls_dir = home_dir.join(".docker/contexts/tls").join(&name_hash);
+        if meta_dir.exists() {
+            anyhow::bail!("Docker context '{name}' already exists")
+        }
         fs::create_dir_all(&meta_dir)?;
         fs::create_dir_all(&tls_dir.join("docker"))?;
         fs::write(meta_dir.join("meta.json"), serde_json::to_string(&meta_json)?)?;
