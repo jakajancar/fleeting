@@ -122,7 +122,7 @@ impl WorkerConfig {
                         log::debug!("Authentication failed, user_data probably still running");
                         sleep(Duration::from_secs(1)).await;
                     }
-                    Err(e) => anyhow::bail!("failure while attempting auth: {e:?}"),
+                    Err(e) => anyhow::bail!("failure while attempting auth: {e:#}"),
                 }
             }
 
@@ -267,7 +267,7 @@ async fn wait_for_tcp_stream(ip: Ipv4Addr, port: u16) -> anyhow::Result<TcpStrea
         match timeout(Duration::from_secs(3), TcpStream::connect((ip, port))).await {
             Ok(Ok(stream)) => break Ok(stream),
             Ok(Err(e)) => {
-                log::debug!("TCP connect failed: {e}");
+                log::debug!("TCP connect failed: {e:#}");
                 sleep(Duration::from_secs(1)).await;
             }
             Err(_) => {
