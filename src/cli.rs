@@ -21,7 +21,7 @@ Run a single docker command on an ephemeral host:
 
 Run multiple commands on the same ephemeral host:
 
-    EC2_MACHINE=$(fleeting ec2 --bg $$)
+    EC2_MACHINE=$(fleeting ec2 --while $$)
     docker --context "fleeting-$EC2_MACHINE" run debian:bookworm echo hello world
     docker --context "fleeting-$EC2_MACHINE" run debian:bookworm echo hello again
     kill $EC2_MACHINE
@@ -49,7 +49,7 @@ pub struct WhatToRun {
 
     /// Keep the VM/Docker context alive in background while PID is running.
     ///
-    /// When started with '--bg', fleeting does the following:
+    /// When started with '--while', fleeting does the following:
     ///
     ///  1. Starts a detached worker in background and prints its PID to stdout so it can be killed explicitly, if desired.
     ///
@@ -60,9 +60,9 @@ pub struct WhatToRun {
     ///  3. The worker monitors PID and exits when it is no longer running.
     ///     Consider using $$, $PPID or 1 as PID.
     #[arg(long, value_name = "PID", global = true)]
-    pub bg: Option<u32>,
+    pub r#while: Option<u32>,
 
-    /// [INTERNAL] This is the worker for the bg launch.
+    /// [INTERNAL] This is the worker for the --while/background launch.
     #[arg(long, value_name = "LAUNCHER_PID", hide = true, global = true)]
     pub worker: Option<u32>,
 }
@@ -70,7 +70,7 @@ pub struct WhatToRun {
 impl Cli {
     pub async fn run(&self) -> anyhow::Result<ExitCode> {
         match &self.what_to_run {
-            WhatToRun { command: Some(command), bg: None, worker: None } => {
+            WhatToRun { command: Some(command), r#while: None, worker: None } => {
                 // Foreground
                 self.logging.init("");
                 let docker_context = self.worker.spawn().await?;
@@ -88,11 +88,11 @@ impl Cli {
                     }
                 }
             }
-            WhatToRun { command: None, bg: Some(_), worker: None } => {
+            WhatToRun { command: None, r#while: Some(_), worker: None } => {
                 // Background launcher
                 self.logging.init("fleeting[launcher]: ");
                 let (worker_pid, context_ready) = spawn_worker(std::process::id())?;
-                println!("{worker_pid}"); // to allow MY_VM=$(fleeting ... --bg) for later killing
+                println!("{worker_pid}"); // to allow MY_VM=$(fleeting ... --while PID) for later killing
                 let succeeded = context_ready.await?;
                 if succeeded {
                     Ok(ExitCode::SUCCESS)
@@ -100,7 +100,7 @@ impl Cli {
                     Ok(ExitCode::FAILURE)
                 }
             }
-            WhatToRun { command: None, bg: Some(watch_pid), worker: Some(launcher_pid) } => {
+            WhatToRun { command: None, r#while: Some(watch_pid), worker: Some(launcher_pid) } => {
                 // Background worker
                 let process_prefix = format!(
                     "fleeting[{}{}{}]: ",
@@ -150,12 +150,12 @@ impl Cli {
                     }
                 }
             }
-            WhatToRun { bg: None, worker: Some(_), .. } => {
-                panic!("--worker but no --bg?");
+            WhatToRun { r#while: None, worker: Some(_), .. } => {
+                panic!("--worker but no --while?");
             }
-            WhatToRun { command: None, bg: None, .. } | WhatToRun { command: Some(_), bg: Some(_), .. } => {
+            WhatToRun { command: None, r#while: None, .. } | WhatToRun { command: Some(_), r#while: Some(_), .. } => {
                 <Self as clap::CommandFactory>::command()
-                    .error(clap::error::ErrorKind::MissingRequiredArgument, "provide exactly one of COMMAND and '--bg'")
+                    .error(clap::error::ErrorKind::MissingRequiredArgument, "provide exactly one of COMMAND and '--while'")
                     .exit();
             }
         }

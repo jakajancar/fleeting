@@ -44,18 +44,31 @@ Run a single docker command on an ephemeral host:
 
 Run multiple commands on the same ephemeral host:
 
-    EC2_MACHINE=$(fleeting ec2 --bg)
+    EC2_MACHINE=$(fleeting ec2 --while $$)
     docker --context &quot;fleeting-$EC2_MACHINE&quot; run debian:bookworm echo hello world
     docker --context &quot;fleeting-$EC2_MACHINE&quot; run debian:bookworm echo hello again
     kill $EC2_MACHINE
 
 <b><u>Options:</u></b>
   <b>-h</b>, <b>--help</b>
-          Print help
+          Print help (see a summary with &#39;-h&#39;)
 
 <b><u>Task (mutually exclusive):</u></b>
-      <b>--bg</b>
-          Start a worker in background, print its pid, and wait until VM is up
+      <b>--while</b> &lt;PID&gt;
+          Keep the VM/Docker context alive in background while PID is running.
+          
+          When started with &#39;--while&#39;, fleeting does the following:
+          
+          1. Starts a detached worker in background and prints its PID to stdout
+          so it can be killed explicitly, if desired.
+          
+          2. Waits for the worker to finish launching a Docker context and
+          exits. The exit code is 0 is the VM started successfully or 1 if not.
+          This ensures the following commands have a fully-functioning Docker
+          context.
+          
+          3. The worker monitors PID and exits when it is no longer running.
+          Consider using $$, $PPID or 1 as PID.
 
   [COMMAND]...
           The subprocess to run
@@ -85,7 +98,7 @@ AWS Elastic Compute Cloud
           [default: t4g.nano]
 
   <b>-h</b>, <b>--help</b>
-          Print help
+          Print help (see a summary with &#39;-h&#39;)
 
 </pre>
 
