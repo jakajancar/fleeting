@@ -1,14 +1,19 @@
 use crate::{logging::LoggingConfig, worker::WorkerConfig};
+use anyhow::Context;
 use clap::{Args, Parser};
 use futures::{future::FusedFuture, FutureExt, TryFutureExt as _};
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     ffi::OsStr,
-    future::Future,
     process::{ExitCode, Stdio},
     time::Duration,
 };
-use tokio::{io::AsyncReadExt as _, process::Command, time::sleep};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt as _, AsyncWriteExt, BufReader},
+    process::Command,
+    time::sleep,
+};
 
 #[derive(Parser)]
 #[command(
@@ -63,14 +68,14 @@ pub struct WhatToRun {
     pub r#while: Option<u32>,
 
     /// [INTERNAL] This is the worker for the --while/background launch.
-    #[arg(long, value_name = "LAUNCHER_PID", hide = true, global = true)]
-    pub worker: Option<u32>,
+    #[arg(long, hide = true, global = true)]
+    pub worker: bool,
 }
 
 impl Cli {
     pub async fn run(&self) -> anyhow::Result<ExitCode> {
         match &self.what_to_run {
-            WhatToRun { command: Some(command), r#while: None, worker: None } => {
+            WhatToRun { command: Some(command), r#while: None, worker: false } => {
                 // Foreground
                 self.logging.init("");
                 let docker_context = self.worker.spawn().await?;
@@ -88,19 +93,69 @@ impl Cli {
                     }
                 }
             }
-            WhatToRun { command: None, r#while: Some(_), worker: None } => {
+            WhatToRun { command: None, r#while: Some(_), worker: false } => {
                 // Background launcher
                 self.logging.init("fleeting[launcher]: ");
-                let (worker_pid, context_ready) = spawn_worker(std::process::id())?;
-                println!("{worker_pid}"); // to allow MY_VM=$(fleeting ... --while PID) for later killing
-                let succeeded = context_ready.await?;
-                if succeeded {
-                    Ok(ExitCode::SUCCESS)
-                } else {
-                    Ok(ExitCode::FAILURE)
+
+                let mut child = {
+                    let mut remaining = env::args_os();
+                    let program = remaining.next().expect("arg0");
+                    Command::new(program)
+                        .args(remaining)
+                        .arg("--worker")
+                        .stdin(Stdio::piped()) // we send `ChildLaunchArgs` and close
+                        .stdout(Stdio::piped()) // we read until newline, expect `ChildContextReady`
+                        .stderr(Stdio::piped()) // we proxy output (`inherit`` would keep our parent alive after launcher exit!)
+                        .detached()
+                        .spawn()?
+                };
+                let child_pid = child.id().expect("child_pid");
+                println!("{child_pid}"); // to allow MY_VM=$(fleeting ... --while PID) for later killing
+
+                // Break out streams
+                let mut child_stdin = child.stdin.take().expect("take child stdin");
+                let child_stdout = child.stdout.take().expect("take child stdout");
+                let child_stderr = child.stderr.take().expect("take child stderr");
+
+                // Send launch args to worker
+                let launch_args = ChildLaunchArgs { launcher_pid: std::process::id() };
+                let launch_args = serde_json::to_string(&launch_args).unwrap();
+                child_stdin.write_all(launch_args.as_bytes()).await?;
+                drop(child_stdin);
+
+                // Read until `ready` is received on stdout, or stderr is closed, whichever comes first.
+                let ready = async move {
+                    let mut lines = BufReader::new(child_stdout).lines();
+                    if let Some(line) = lines.next_line().await? {
+                        log::debug!("Received stdout line from child: {line}");
+                        let message: ChildContextReady = serde_json::from_str(&line).context("decoding worker message")?;
+                        Ok::<_, anyhow::Error>(Some(message))
+                    } else {
+                        Ok(None)
+                    }
+                };
+                let logs_finished = async move {
+                    let mut lines = BufReader::new(child_stderr).lines();
+                    while let Some(line) = lines.next_line().await? {
+                        eprintln!("{line}");
+                    }
+                    Ok::<_, anyhow::Error>(())
+                };
+
+                tokio::select! {
+                    biased; // favor final log lines just before ready?
+                    result = logs_finished => {
+                        result.context("reading worker logs")?;
+                        log::error!("Worker failed to establish a Docker context.");
+                        Ok(ExitCode::FAILURE)
+                    }
+                    result = ready => {
+                        result.context("reading ready signal")?;
+                        Ok(ExitCode::SUCCESS)
+                    }
                 }
             }
-            WhatToRun { command: None, r#while: Some(watch_pid), worker: Some(launcher_pid) } => {
+            WhatToRun { command: None, r#while: Some(watch_pid), worker: true } => {
                 // Background worker
                 let process_prefix = format!(
                     "fleeting[{}{}{}]: ",
@@ -110,17 +165,25 @@ impl Cli {
                 );
                 self.logging.init(process_prefix);
 
-                let launcher_exited = waitpid(*launcher_pid).map_err(|e| e.context("waitpid launcher")).fuse();
+                log::debug!("Reading launch args...");
+                let mut launch_args = Vec::new();
+                tokio::io::stdin().read_to_end(&mut launch_args).await?;
+                let launch_args: ChildLaunchArgs = serde_json::from_slice(&launch_args).context("decoding launch args")?;
+                log::debug!("{launch_args:?}");
+
+                log::debug!("Waiting for docker context...");
+                let launcher_exited = waitpid(launch_args.launcher_pid).map_err(|e| e.context("waitpid launcher")).fuse();
                 let watch_exited = waitpid(*watch_pid).map_err(|e| e.context("waitpid user process")).fuse();
                 let docker_context_ready = self.worker.spawn().fuse();
-
                 tokio::pin!(launcher_exited);
                 tokio::pin!(watch_exited);
-                let _docker_context = tokio::select! {
-                    biased;
+                let mut docker_context = tokio::select! {
                     result = docker_context_ready => {
                         let docker_context = result?;
-                        println!("ok");
+                        let ready = ChildContextReady {};
+                        let ready = serde_json::to_string(&ready).unwrap();
+                        log::debug!("Sending ready line to launcher: {ready}");
+                        println!("{ready}");
                         docker_context
                     }
                     result = &mut launcher_exited => {
@@ -135,9 +198,14 @@ impl Cli {
                     }
                 };
 
+                log::debug!("Monitoring docker context...");
                 loop {
                     tokio::select! {
-                        biased;
+                        result = &mut docker_context => {
+                            // Context finished first
+                            let err = result.expect_err("should not complete cleanly");
+                            break Err(err)
+                        }
                         result = &mut launcher_exited, if !launcher_exited.is_terminated() => {
                             result?;
                             log::debug!("Launcher exited after sending OK (expected)");
@@ -150,7 +218,7 @@ impl Cli {
                     }
                 }
             }
-            WhatToRun { r#while: None, worker: Some(_), .. } => {
+            WhatToRun { r#while: None, worker: true, .. } => {
                 panic!("--worker but no --while?");
             }
             WhatToRun { command: None, r#while: None, .. } | WhatToRun { command: Some(_), r#while: Some(_), .. } => {
@@ -160,42 +228,6 @@ impl Cli {
             }
         }
     }
-}
-
-/// Spawns the worker and returns its pid and a future that completes when it has reported the context is ready or exited.
-fn spawn_worker(launcher_pid: u32) -> anyhow::Result<(u32, impl Future<Output = anyhow::Result<bool>>)> {
-    let mut remaining = env::args_os();
-    let program = remaining.next().expect("arg0");
-    let mut command = Command::new(program);
-    command.args(remaining);
-    command.args(["--worker", &launcher_pid.to_string()]);
-
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::inherit());
-    #[cfg(windows)]
-    command.creation_flags({
-        const DETACHED_PROCESS: u32 = 0x00000008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-    });
-    #[cfg(unix)]
-    command.process_group(0);
-
-    let mut worker = command.spawn()?;
-    let worker_pid = worker.id().expect("child pid");
-    let context_ready = async move {
-        let mut stdout = worker.stdout.take().expect("stdout");
-        let mut buf = [0u8; 3];
-        match stdout.read_exact(&mut buf).await {
-            Ok(_) if &buf == b"ok\n" => Ok(true),
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-            Ok(_) => Err(anyhow::anyhow!("unexpected response: {}", String::from_utf8_lossy(&buf))),
-            Err(e) => Err(anyhow::Error::new(e)),
-        }
-    };
-    Ok((worker_pid, context_ready))
 }
 
 async fn run_user_command(docker_context_name: impl Into<String>, command: impl IntoIterator<Item = impl AsRef<OsStr>>) -> anyhow::Result<ExitCode> {
@@ -225,5 +257,33 @@ async fn waitpid(pid: u32) -> anyhow::Result<()> {
         } else {
             break Ok(());
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChildLaunchArgs {
+    pub launcher_pid: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChildContextReady {}
+
+trait CommandExt {
+    fn detached(&mut self) -> &mut Self;
+}
+
+impl CommandExt for Command {
+    fn detached(&mut self) -> &mut Self {
+        #[cfg(windows)]
+        self.creation_flags({
+            const DETACHED_PROCESS: u32 = 0x00000008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        });
+        #[cfg(unix)]
+        self.process_group(0);
+
+        self
     }
 }
