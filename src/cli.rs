@@ -167,8 +167,9 @@ fn spawn_worker(launcher_pid: u32) -> anyhow::Result<(u32, impl Future<Output = 
     let mut remaining = env::args_os();
     let program = remaining.next().expect("arg0");
     let mut command = Command::new(program);
-    command.args(["--worker", &launcher_pid.to_string()]);
     command.args(remaining);
+    command.args(["--worker", &launcher_pid.to_string()]);
+
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::inherit());
