@@ -160,7 +160,7 @@ impl Cli {
                 let process_prefix = format!(
                     "fleeting[{}{}{}]: ",
                     std::process::id(),
-                    if let Some(_) = &self.worker.custom_context_name { " " } else { "" },
+                    if let Some(_) = &self.worker.custom_context_name { "/" } else { "" },
                     if let Some(s) = &self.worker.custom_context_name { s.as_str() } else { "" },
                 );
                 self.logging.init(process_prefix);
