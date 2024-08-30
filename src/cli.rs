@@ -172,6 +172,13 @@ fn spawn_worker(launcher_pid: u32) -> anyhow::Result<(u32, impl Future<Output = 
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::inherit());
+    #[cfg(windows)]
+    command.creation_flags({
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    });
     #[cfg(unix)]
     command.process_group(0);
 
