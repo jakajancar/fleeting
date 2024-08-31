@@ -77,7 +77,11 @@ impl Cli {
         match &self.what_to_run {
             WhatToRun { command: Some(command), r#while: None, worker: false } => {
                 // Foreground
-                self.logging.init("");
+                self.logging.init(None)?;
+                if self.logging.log_file.is_some() {
+                    anyhow::bail!("'--log-file' is only applicable when using '--while'.")
+                }
+
                 let docker_context = self.worker.spawn().await?;
                 let docker_context_name = docker_context.name().to_owned();
                 let user_command = run_user_command(&docker_context_name, command);
@@ -85,7 +89,7 @@ impl Cli {
             }
             WhatToRun { command: None, r#while: Some(_), worker: false } => {
                 // Background launcher
-                self.logging.init("fleeting[launcher]: ");
+                self.logging.init(None)?;
 
                 let mut child = Command::new_argv(env::args_os())
                     .arg("--worker")
@@ -142,13 +146,12 @@ impl Cli {
             }
             WhatToRun { command: None, r#while: Some(watch_pid), worker: true } => {
                 // Background worker
-                let process_prefix = format!(
+                self.logging.init(Some(format!(
                     "fleeting[{}{}{}]: ",
                     std::process::id(),
                     if let Some(_) = &self.worker.custom_context_name { "/" } else { "" },
                     if let Some(s) = &self.worker.custom_context_name { s.as_str() } else { "" },
-                );
-                self.logging.init(process_prefix);
+                )))?;
 
                 log::debug!("Reading launch args...");
                 let mut launch_args = Vec::new();

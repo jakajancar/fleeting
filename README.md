@@ -80,6 +80,12 @@ Run multiple commands on the same ephemeral host:
   <b>-v</b>, <b>--verbose</b>
           Output additional debugging information
 
+      <b>--log-file</b> &lt;PATH&gt;
+          Log file for the background worker.
+          
+          Applicable only when using &#39;--while&#39;. Helps debugging docker context
+          failures after the foreground launcher has exited.
+
 <b><u>VM/Docker options:</u></b>
       <b>--context-name</b> &lt;NAME&gt;
           Name of the ephemeral docker context [default: fleeting-&lt;pid&gt;]
