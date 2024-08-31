@@ -1,7 +1,7 @@
 use crate::{logging::LoggingConfig, worker::WorkerConfig};
 use anyhow::Context;
 use clap::{Args, Parser};
-use futures::{future::FusedFuture, FutureExt, TryFutureExt as _};
+use futures::{FutureExt, TryFutureExt as _};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
@@ -81,17 +81,7 @@ impl Cli {
                 let docker_context = self.worker.spawn().await?;
                 let docker_context_name = docker_context.name().to_owned();
                 let user_command = run_user_command(&docker_context_name, command);
-                tokio::select! {
-                    result = docker_context => {
-                        // Context finished first
-                        let err = result.expect_err("should not complete cleanly");
-                        Err(err)
-                    }
-                    result = user_command => {
-                        // User command run finished first
-                        result
-                    }
-                }
+                docker_context.wrap(user_command).await
             }
             WhatToRun { command: None, r#while: Some(_), worker: false } => {
                 // Background launcher
@@ -172,17 +162,21 @@ impl Cli {
                 log::debug!("{launch_args:?}");
 
                 log::debug!("Waiting for docker context...");
-                let launcher_exited = waitpid(launch_args.launcher_pid).map_err(|e| e.context("waitpid launcher")).fuse();
-                let watch_exited = waitpid(*watch_pid).map_err(|e| e.context("waitpid user process")).fuse();
+                let launcher_exited = waitpid(launch_args.launcher_pid)
+                    .map_ok(|()| log::debug!("Launcher exited."))
+                    .map_err(|e| e.context("waitpid launcher"));
+                let watch_exited = waitpid(*watch_pid)
+                    .map_ok(|()| log::info!("Watched processes exited."))
+                    .map_err(|e| e.context("waitpid watched process"));
                 let docker_context_ready = self.worker.spawn().fuse();
                 tokio::pin!(launcher_exited);
                 tokio::pin!(watch_exited);
-                let mut docker_context = tokio::select! {
+                let docker_context = tokio::select! {
                     result = docker_context_ready => {
                         let docker_context = result?;
                         let ready = ChildContextReady {};
                         let ready = serde_json::to_string(&ready).unwrap();
-                        log::debug!("Sending ready line to launcher: {ready}");
+                        log::debug!("Context ready, sending line to launcher: {ready}");
                         println!("{ready}");
                         docker_context
                     }
@@ -198,25 +192,13 @@ impl Cli {
                     }
                 };
 
-                log::debug!("Monitoring docker context...");
-                loop {
-                    tokio::select! {
-                        result = &mut docker_context => {
-                            // Context finished first
-                            let err = result.expect_err("should not complete cleanly");
-                            break Err(err)
-                        }
-                        result = &mut launcher_exited, if !launcher_exited.is_terminated() => {
-                            result?;
-                            log::debug!("Launcher exited after sending OK (expected)");
-                        }
-                        result = &mut watch_exited => {
-                            result?;
-                            log::info!("Watched processes exited, exiting.");
-                            break Ok(ExitCode::SUCCESS)
-                        }
-                    }
-                }
+                log::debug!("Waiting for launcher to exit (sanity check)...");
+                launcher_exited.await?;
+
+                log::info!("Waiting until watched process exits...");
+                docker_context.wrap(watch_exited).await?;
+
+                Ok(ExitCode::SUCCESS)
             }
             WhatToRun { r#while: None, worker: true, .. } => {
                 panic!("--worker but no --while?");

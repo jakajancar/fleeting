@@ -53,6 +53,26 @@ impl DockerContext {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// Returns when either `task` completes or the context fails.
+    /// If the tasks completes first, its return value is returned.
+    /// If either the task or the context fail, `Err` is returned.
+    pub async fn wrap<F, FRet>(self, task: F) -> anyhow::Result<FRet>
+    where
+        F: Future<Output = anyhow::Result<FRet>>,
+    {
+        tokio::select! {
+            result = self => {
+                match result {
+                    Ok(()) => unreachable!("should not complete cleanly"),
+                    Err(e) => Err(anyhow::format_err!("docker context failed before task could be completed: {e:#}")),
+                }
+            }
+            result = task => {
+                result
+            }
+        }
+    }
 }
 
 impl Future for DockerContext {
