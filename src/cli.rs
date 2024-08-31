@@ -87,18 +87,13 @@ impl Cli {
                 // Background launcher
                 self.logging.init("fleeting[launcher]: ");
 
-                let mut child = {
-                    let mut remaining = env::args_os();
-                    let program = remaining.next().expect("arg0");
-                    Command::new(program)
-                        .args(remaining)
-                        .arg("--worker")
-                        .stdin(Stdio::piped()) // we send `ChildLaunchArgs` and close
-                        .stdout(Stdio::piped()) // we read until newline, expect `ChildContextReady`
-                        .stderr(Stdio::piped()) // we proxy output (`inherit`` would keep our parent alive after launcher exit!)
-                        .detached()
-                        .spawn()?
-                };
+                let mut child = Command::new_argv(env::args_os())
+                    .arg("--worker")
+                    .stdin(Stdio::piped()) // we send `ChildLaunchArgs` and close
+                    .stdout(Stdio::piped()) // we read until newline, expect `ChildContextReady`
+                    .stderr(Stdio::piped()) // we proxy output (`inherit`` would keep our parent alive after launcher exit!)
+                    .detached()
+                    .spawn()?;
                 let child_pid = child.id().expect("child_pid");
                 println!("{child_pid}"); // to allow MY_VM=$(fleeting ... --while PID) for later killing
 
@@ -214,10 +209,7 @@ impl Cli {
 
 async fn run_user_command(docker_context_name: impl Into<String>, command: impl IntoIterator<Item = impl AsRef<OsStr>>) -> anyhow::Result<ExitCode> {
     log::debug!("Running user command");
-    let mut remaining = command.into_iter();
-    let program = remaining.next().expect("non-empty command");
-    let mut child = tokio::process::Command::new(program)
-        .args(remaining)
+    let mut child = tokio::process::Command::new_argv(command)
         .env("DOCKER_CONTEXT", docker_context_name.into())
         .spawn()?;
     let exit_status = child.wait().await?;
@@ -251,10 +243,19 @@ pub struct ChildLaunchArgs {
 pub struct ChildContextReady {}
 
 trait CommandExt {
+    /// Create instance using `argv[0]` for `program` and the remainder for `args`.
+    fn new_argv<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(argv: I) -> Self;
     fn detached(&mut self) -> &mut Self;
 }
 
 impl CommandExt for Command {
+    fn new_argv<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(argv: I) -> Self {
+        let mut remainder = argv.into_iter();
+        let mut command = Self::new(remainder.next().expect("arg0"));
+        command.args(remainder);
+        command
+    }
+
     fn detached(&mut self) -> &mut Self {
         #[cfg(windows)]
         self.creation_flags({
