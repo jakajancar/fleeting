@@ -33,6 +33,8 @@ Windows builds are also [available](https://github.com/jakajancar/fleeting/relea
 
 ## Usage
 
+### General
+
 <pre>
 The simplest way to &quot;docker run&quot; or &quot;docker build&quot; in the cloud
 
@@ -48,6 +50,9 @@ Run multiple commands on the same ephemeral host:
     docker --context &quot;fleeting-$EC2_MACHINE&quot; run debian:bookworm echo hello world
     docker --context &quot;fleeting-$EC2_MACHINE&quot; run debian:bookworm echo hello again
     kill $EC2_MACHINE
+
+<b><u>Providers:</u></b>
+  <b>ec2</b>  AWS Elastic Compute Cloud
 
 <b><u>Options:</u></b>
   <b>-h</b>, <b>--help</b>
@@ -94,9 +99,24 @@ Run multiple commands on the same ephemeral host:
           Docker version to install on server, e.g. &#39;=1.2.3&#39; or &#39;^1.2.3&#39;
           
           [default: *]
+</pre>
 
-<b><u>fleeting ec2:</u></b>
-AWS Elastic Compute Cloud
+### AWS Elastic Compute Cloud
+
+<pre>
+<b><u>Usage:</u></b> <b>fleeting</b> <b>ec2</b> [OPTIONS] [COMMAND]...
+
+<b><u>Authentication:</u></b>
+  - Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+  - Shared config (~/.aws/config, ~/.aws/credentials)
+  - Web Identity Tokens
+  - ECS (IAM Roles for Tasks) &amp; General HTTP credentials
+  - EC2 IMDSv2
+
+More info:
+https://docs.rs/aws-config/1.5.5/aws_config/default_provider/credentials/struct.DefaultCredentialsChain.html
+
+<b><u>Options:</u></b>
       <b>--region</b> &lt;REGION&gt;
           [default: $AWS[_DEFAULT]_REGION &gt; profile &gt; EC2 IMDSv2 &gt; us-east-1]
 
@@ -105,11 +125,9 @@ AWS Elastic Compute Cloud
 
       <b>--disk</b> &lt;DISK&gt;
           Disk size, in GiBs
-
-  <b>-h</b>, <b>--help</b>
-          Print help (see a summary with &#39;-h&#39;)
-
 </pre>
+
+
 
 ## License
 

@@ -15,9 +15,9 @@ use tokio::{
     time::sleep,
 };
 
+/// The simplest way to "docker run" or "docker build" in the cloud.
 #[derive(Parser)]
 #[command(
-    about = r#"The simplest way to "docker run" or "docker build" in the cloud"#,
     override_usage = color_print::cstr! {r#"<bold>fleeting</bold> <<PROVIDER>> [OPTIONS] [COMMAND]...
 
 Run a single docker command on an ephemeral host:
@@ -31,7 +31,6 @@ Run multiple commands on the same ephemeral host:
     docker --context "fleeting-$EC2_MACHINE" run debian:bookworm echo hello again
     kill $EC2_MACHINE
 "#},
-    flatten_help = true,
 )]
 
 pub struct Cli {

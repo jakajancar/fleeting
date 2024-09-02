@@ -21,7 +21,6 @@ pub struct SomeVmProvider {
 #[derive(Subcommand, Clone)]
 #[command(subcommand_help_heading = "Providers", subcommand_value_name = "PROVIDER", disable_help_subcommand = true)]
 enum SomeVmProviderEnum {
-    /// AWS Elastic Compute Cloud
     Ec2(Ec2),
 }
 

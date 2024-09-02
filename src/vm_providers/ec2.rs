@@ -14,7 +14,22 @@ use tokio::time::{sleep, Duration};
 
 const SECURITY_GROUP_NAME: &str = "fleeting";
 
+/// AWS Elastic Compute Cloud
 #[derive(Args, Clone)]
+#[command(
+    override_usage = color_print::cstr! {r#"<bold>fleeting</bold> <bold>ec2</bold> [OPTIONS] [COMMAND]...
+
+<bold><underline>Authentication:</underline></bold>
+  - Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+  - Shared config (~/.aws/config, ~/.aws/credentials)
+  - Web Identity Tokens
+  - ECS (IAM Roles for Tasks) & General HTTP credentials
+  - EC2 IMDSv2
+
+More info:
+https://docs.rs/aws-config/1.5.5/aws_config/default_provider/credentials/struct.DefaultCredentialsChain.html
+
+"#},)]
 pub struct Ec2 {
     /// [default: $AWS[_DEFAULT]_REGION > profile > EC2 IMDSv2 > us-east-1]
     #[arg(long)]

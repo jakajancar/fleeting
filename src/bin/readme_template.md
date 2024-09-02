@@ -33,9 +33,7 @@ Windows builds are also [available](https://github.com/jakajancar/fleeting/relea
 
 ## Usage
 
-<pre>
-{usage_html}
-</pre>
+{usage_markdown}
 
 ## License
 
