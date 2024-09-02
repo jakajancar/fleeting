@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use aws_config::{meta::region::RegionProviderChain, Region};
 use aws_sdk_ec2::{
     self as ec2,
-    types::{ArchitectureType, InstanceStateName, InstanceType, ResourceType, ShutdownBehavior, Tag, TagSpecification},
+    types::{ArchitectureType, BlockDeviceMapping, EbsBlockDevice, InstanceStateName, InstanceType, ResourceType, ShutdownBehavior, Tag, TagSpecification},
 };
 use aws_sdk_sts::{self as sts};
 use base64::prelude::*;
@@ -22,6 +22,10 @@ pub struct Ec2 {
 
     #[arg(long, default_value = "t4g.nano")]
     instance_type: InstanceType,
+
+    /// Disk size, in GiBs.
+    #[arg(long)]
+    disk: Option<usize>,
 }
 
 #[async_trait]
@@ -118,6 +122,17 @@ impl VmProvider for Ec2 {
                 .user_data(BASE64_STANDARD.encode(user_data))
                 .instance_initiated_shutdown_behavior(ShutdownBehavior::Terminate)
                 .security_group_ids(security_group_id)
+                .block_device_mappings(
+                    BlockDeviceMapping::builder()
+                        .device_name("/dev/sda1")
+                        .ebs(
+                            EbsBlockDevice::builder()
+                                .delete_on_termination(true)
+                                .set_volume_size(self.disk.map(|n| n.try_into().expect("valid disk size")))
+                                .build(),
+                        )
+                        .build(),
+                )
                 .tag_specifications(
                     TagSpecification::builder()
                         .resource_type(ResourceType::Instance)

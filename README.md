@@ -103,6 +103,9 @@ AWS Elastic Compute Cloud
       <b>--instance-type</b> &lt;INSTANCE_TYPE&gt;
           [default: t4g.nano]
 
+      <b>--disk</b> &lt;DISK&gt;
+          Disk size, in GiBs
+
   <b>-h</b>, <b>--help</b>
           Print help (see a summary with &#39;-h&#39;)
 
