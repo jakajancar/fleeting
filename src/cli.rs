@@ -1,4 +1,4 @@
-use crate::{logging::LoggingConfig, worker::WorkerConfig};
+use crate::{command_ext::CommandExt as _, logging::LoggingConfig, worker::WorkerConfig};
 use anyhow::Context;
 use clap::{Args, Parser};
 use futures::{FutureExt, TryFutureExt as _};
@@ -26,10 +26,9 @@ Run a single docker command on an ephemeral host:
 
 Run multiple commands on the same ephemeral host:
 
-    EC2_MACHINE=$(fleeting ec2 --while $$)
-    docker --context "fleeting-$EC2_MACHINE" run debian:bookworm echo hello world
-    docker --context "fleeting-$EC2_MACHINE" run debian:bookworm echo hello again
-    kill $EC2_MACHINE
+    fleeting ec2 --while $$ --context-name greeter
+    docker --context greeter run debian:bookworm echo hello world
+    docker --context greeter run debian:bookworm echo hello again
 "#},
 )]
 
@@ -55,7 +54,7 @@ pub struct WhatToRun {
     ///
     /// When started with '--while', fleeting does the following:
     ///
-    ///  1. Starts a detached worker in background and prints its PID to stdout so it can be killed explicitly, if desired.
+    ///  1. Starts a detached worker in background and prints its PID to stdout so it can be captured (VM_PID=$(fleeting ...)) and killed explicitly, if desired.
     ///
     ///  2. Waits for the worker to finish launching a Docker context and exits.
     ///     The exit code is 0 is the VM started successfully or 1 if not.
@@ -243,32 +242,3 @@ pub struct ChildLaunchArgs {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChildContextReady {}
-
-trait CommandExt {
-    /// Create instance using `argv[0]` for `program` and the remainder for `args`.
-    fn new_argv<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(argv: I) -> Self;
-    fn detached(&mut self) -> &mut Self;
-}
-
-impl CommandExt for Command {
-    fn new_argv<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(argv: I) -> Self {
-        let mut remainder = argv.into_iter();
-        let mut command = Self::new(remainder.next().expect("arg0"));
-        command.args(remainder);
-        command
-    }
-
-    fn detached(&mut self) -> &mut Self {
-        #[cfg(windows)]
-        self.creation_flags({
-            const DETACHED_PROCESS: u32 = 0x00000008;
-            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-        });
-        #[cfg(unix)]
-        self.process_group(0);
-
-        self
-    }
-}

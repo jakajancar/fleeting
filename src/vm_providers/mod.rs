@@ -1,6 +1,9 @@
 mod ec2;
 pub use ec2::Ec2;
 
+mod multipass;
+pub use multipass::Multipass;
+
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use std::net::Ipv4Addr;
@@ -22,6 +25,7 @@ pub struct SomeVmProvider {
 #[command(subcommand_help_heading = "Providers", subcommand_value_name = "PROVIDER", disable_help_subcommand = true)]
 enum SomeVmProviderEnum {
     Ec2(Ec2),
+    Multipass(Multipass),
 }
 
 #[async_trait]
@@ -29,6 +33,7 @@ impl VmProvider for SomeVmProvider {
     async fn spawn(&self, user_data: &str) -> anyhow::Result<Ipv4Addr> {
         match &self.inner {
             SomeVmProviderEnum::Ec2(p) => p.spawn(user_data).await,
+            SomeVmProviderEnum::Multipass(p) => p.spawn(user_data).await,
         }
     }
 }

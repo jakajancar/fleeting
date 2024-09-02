@@ -46,13 +46,13 @@ Run a single docker command on an ephemeral host:
 
 Run multiple commands on the same ephemeral host:
 
-    EC2_MACHINE=$(fleeting ec2 --while $$)
-    docker --context &quot;fleeting-$EC2_MACHINE&quot; run debian:bookworm echo hello world
-    docker --context &quot;fleeting-$EC2_MACHINE&quot; run debian:bookworm echo hello again
-    kill $EC2_MACHINE
+    fleeting ec2 --while $$ --context-name greeter
+    docker --context greeter run debian:bookworm echo hello world
+    docker --context greeter run debian:bookworm echo hello again
 
 <b><u>Providers:</u></b>
-  <b>ec2</b>  AWS Elastic Compute Cloud
+  <b>ec2</b>        AWS Elastic Compute Cloud
+  <b>multipass</b>  Canonical Multipass (local)
 
 <b><u>Options:</u></b>
   <b>-h</b>, <b>--help</b>
@@ -65,7 +65,8 @@ Run multiple commands on the same ephemeral host:
           When started with &#39;--while&#39;, fleeting does the following:
           
           1. Starts a detached worker in background and prints its PID to stdout
-          so it can be killed explicitly, if desired.
+          so it can be captured (VM_PID=$(fleeting ...)) and killed explicitly,
+          if desired.
           
           2. Waits for the worker to finish launching a Docker context and
           exits. The exit code is 0 is the VM started successfully or 1 if not.
@@ -122,6 +123,27 @@ https://docs.rs/aws-config/1.5.5/aws_config/default_provider/credentials/struct.
 
       <b>--instance-type</b> &lt;INSTANCE_TYPE&gt;
           [default: t4g.nano]
+
+      <b>--disk</b> &lt;DISK&gt;
+          Disk size, in GiBs
+</pre>
+
+### Canonical Multipass (local)
+
+<pre>
+<b><u>Usage:</u></b> <b>fleeting</b> <b>multipass</b> [OPTIONS] [COMMAND]...
+
+This provider is primarily intended for developing and testing fleeting
+itself. To get started, install multipass as described on:
+
+    https://multipass.run/install
+
+<b><u>Options:</u></b>
+      <b>--cpus</b> &lt;CPUS&gt;
+          CPUs
+
+      <b>--memory</b> &lt;MEMORY&gt;
+          Memory, in GBs
 
       <b>--disk</b> &lt;DISK&gt;
           Disk size, in GiBs

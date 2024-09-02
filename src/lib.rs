@@ -1,5 +1,6 @@
 pub mod arch;
 pub mod cli;
+pub mod command_ext;
 pub mod docker_context;
 pub mod docker_releases;
 pub mod docker_tls;
