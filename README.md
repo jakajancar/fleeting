@@ -52,6 +52,7 @@ Run multiple commands on the same ephemeral host:
 
 <b><u>Providers:</u></b>
   <b>ec2</b>        AWS Elastic Compute Cloud
+  <b>gce</b>        Google Compute Engine
   <b>multipass</b>  Canonical Multipass (local)
 
 <b><u>Options:</u></b>
@@ -123,6 +124,42 @@ https://docs.rs/aws-config/1.5.5/aws_config/default_provider/credentials/struct.
 
       <b>--instance-type</b> &lt;INSTANCE_TYPE&gt;
           [default: t4g.nano]
+
+      <b>--disk</b> &lt;DISK&gt;
+          Disk size, in GiBs
+</pre>
+
+### Google Compute Engine
+
+<pre>
+<b><u>Usage:</u></b> <b>fleeting</b> <b>gce</b> [OPTIONS] [COMMAND]...
+
+<b><u>Authentication:</u></b>
+  - GOOGLE_APPLICATION_CREDENTIALS (pointing to JSON file)
+  - gcloud auth application-default login
+  - Metadata server, if running on GCE
+
+<b><u>Setup:</u></b>
+  - Create a project
+  - Enable the Compute Engine API for it
+  - Create a service account and download credentials JSON
+
+<b><u>Limitations:</u></b>
+While GCE instances will automatically stop, they will not be automatically
+deleted. fleeting collects garbage at the beginning of the run, but you will
+be left with a small number of stopped instances and will continue to pay for
+their associated disks. Hopefully, this will be resolved in the future with
+termination_time / max_run_duration, once GCE client libraries support it.
+
+<b><u>Options:</u></b>
+      <b>--project</b> &lt;PROJECT&gt;
+          Project in which to create instances [required]
+
+      <b>--zone</b> &lt;ZONE&gt;
+          [default: us-central1-a]
+
+      <b>--machine-type</b> &lt;MACHINE_TYPE&gt;
+          [default: e2-micro]
 
       <b>--disk</b> &lt;DISK&gt;
           Disk size, in GiBs

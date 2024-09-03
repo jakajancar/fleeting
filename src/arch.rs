@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+#[derive(Debug, Clone, Copy)]
 pub enum Arch {
     Arm64,
     Amd64,
@@ -14,13 +15,13 @@ impl Arch {
         }
     }
 
-    // /// Architecture as returned by `dpkg --print-architecture`.
-    // pub fn as_dpkg(&self) -> &str {
-    //     match self {
-    //         Arch::Arm64 => "arm64",
-    //         Arch::Amd64 => "amd64",
-    //     }
-    // }
+    /// Architecture as returned by `dpkg --print-architecture`.
+    pub fn as_dpkg(&self) -> &str {
+        match self {
+            Arch::Arm64 => "arm64",
+            Arch::Amd64 => "amd64",
+        }
+    }
 }
 
 impl FromStr for Arch {
