@@ -16,8 +16,6 @@ Priorities are:
  2. **Cost control**: The VM instance will auto-terminate unless fleeting sends keepalives.
  3. **Performance**: On AWS EC2, a docker host is typically ready in 30-60 seconds.
 
-Currently supports Amazon Web Services (EC2). Google Cloud and Hetzner are planned.
-
 ## Installation
 
 fleeting is distributed as a single binary and available for Linux and macOS.
