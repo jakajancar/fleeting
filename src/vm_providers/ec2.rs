@@ -94,37 +94,7 @@ impl VmProvider for Ec2 {
 
         let step: _ = step.next();
         log::info!("Creating security group if needed...");
-        let security_group_id = {
-            let output = ec2_client.describe_security_groups().group_names(SECURITY_GROUP_NAME).send().await?;
-            match output.security_groups() {
-                [] => {
-                    let output = ec2_client
-                        .create_security_group()
-                        .group_name(SECURITY_GROUP_NAME)
-                        .description("fleeting ephemeral instances")
-                        .send()
-                        .await?;
-                    let group_id = output.group_id().unwrap();
-
-                    ec2_client
-                        .authorize_security_group_ingress()
-                        .group_id(group_id)
-                        .ip_protocol("-1")
-                        .cidr_ip("0.0.0.0/0")
-                        .send()
-                        .await?;
-
-                    log::info!("{group_id} (created)");
-                    group_id.to_owned()
-                }
-                [sg] => {
-                    let group_id = sg.group_id().unwrap();
-                    log::info!("{group_id} (already existed)");
-                    group_id.to_owned()
-                }
-                x => panic!("{} matching security groups", x.len()),
-            }
-        };
+        let security_group_id = get_or_create_security_group(ec2_client.clone()).await?;
 
         let step: _ = step.next();
         log::info!("Launching an instance...");
@@ -211,5 +181,46 @@ impl<T> OptionVecExt<T> for Option<Vec<T>> {
         let vec = self.unwrap_or_default();
         assert_eq!(vec.len(), 1, "expected exactly one: {msg}");
         vec.into_iter().nth(0).unwrap()
+    }
+}
+
+async fn create_security_group(ec2_client: ec2::Client) -> Result<String, anyhow::Error> {
+    let output = ec2_client
+        .create_security_group()
+        .group_name(SECURITY_GROUP_NAME)
+        .description("fleeting ephemeral instances")
+        .send()
+        .await?;
+    let group_id = output.group_id().unwrap();
+
+    ec2_client
+        .authorize_security_group_ingress()
+        .group_id(group_id)
+        .ip_protocol("-1")
+        .cidr_ip("0.0.0.0/0")
+        .send()
+        .await?;
+
+    log::info!("{group_id} (created)");
+    Ok(group_id.to_string())
+}
+
+async fn get_or_create_security_group(ec2_client: ec2::Client) -> Result<String, anyhow::Error> {
+    let result = ec2_client.describe_security_groups().group_names(SECURITY_GROUP_NAME).send().await;
+
+    match result {
+        Ok(output) => match output.security_groups() {
+            [] => create_security_group(ec2_client).await,
+            [sg] => {
+                let group_id = sg.group_id().unwrap();
+                log::info!("{group_id} (already existed)");
+                Ok(group_id.to_string())
+            }
+            x => Err(anyhow::anyhow!("{} matching security groups", x.len())),
+        },
+        Err(e) => match e.as_service_error().and_then(|e| e.meta().code()) {
+            Some("InvalidGroup.NotFound") => create_security_group(ec2_client).await,
+            _ => Err(anyhow::anyhow!("error while describing security groups: {:?}", e)),
+        },
     }
 }
