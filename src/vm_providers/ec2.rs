@@ -94,7 +94,15 @@ impl VmProvider for Ec2 {
 
         let step: _ = step.next();
         log::info!("Creating security group if needed...");
-        let security_group_id = get_or_create_security_group(ec2_client.clone()).await?;
+        let security_group_id = {
+            let (id, created) = get_or_create_security_group(ec2_client.clone()).await?;
+            if created {
+                log::info!("{id} (created)");
+            } else {
+                log::info!("{id} (already existed)");
+            }
+            id
+        };
 
         let step: _ = step.next();
         log::info!("Launching an instance...");
@@ -201,26 +209,31 @@ async fn create_security_group(ec2_client: ec2::Client) -> Result<String, anyhow
         .send()
         .await?;
 
-    log::info!("{group_id} (created)");
     Ok(group_id.to_string())
 }
 
-async fn get_or_create_security_group(ec2_client: ec2::Client) -> Result<String, anyhow::Error> {
+async fn get_or_create_security_group(ec2_client: ec2::Client) -> Result<(String, bool), anyhow::Error> {
     let result = ec2_client.describe_security_groups().group_names(SECURITY_GROUP_NAME).send().await;
 
     match result {
         Ok(output) => match output.security_groups() {
-            [] => create_security_group(ec2_client).await,
-            [sg] => {
-                let group_id = sg.group_id().unwrap();
-                log::info!("{group_id} (already existed)");
-                Ok(group_id.to_string())
+            [] => {
+                // Not sure if this can really happen. I assume `describe_security_groups` would always fail, if SGs don't exist.
+                let group_id = create_security_group(ec2_client).await?;
+                Ok((group_id, true))
             }
-            x => Err(anyhow::anyhow!("{} matching security groups", x.len())),
+            [sg] => {
+                let group_id = sg.group_id().unwrap().to_owned();
+                Ok((group_id, false))
+            }
+            x => anyhow::bail!("{} matching security groups", x.len()),
         },
         Err(e) => match e.as_service_error().and_then(|e| e.meta().code()) {
-            Some("InvalidGroup.NotFound") => create_security_group(ec2_client).await,
-            _ => Err(anyhow::anyhow!("error while describing security groups: {:?}", e)),
+            Some("InvalidGroup.NotFound") => {
+                let group_id = create_security_group(ec2_client).await?;
+                Ok((group_id, true))
+            }
+            _ => anyhow::bail!("error while describing security groups: {:#}", e),
         },
     }
 }
